@@ -1,65 +1,73 @@
-from fastapi import FastAPI,status,Request,HTTPException
-from pydantic import BaseModel,Field
-from typing import Optional,Any
+from fastapi import FastAPI, status, HTTPException, Request
 from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional, Any
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
 app = FastAPI()
 
 class BaseResponse(BaseModel):
-    status_code:int
-    message:str
-    data:Optional[Any]
-    error:Optional[str]
+    statusCode: int     
+    message: str        
+    data: Optional[Any] = None
+    error: Optional[Any] = None
     timestamp: str
-    path:str
+    path: str
 
-class FlightCreate(BaseModel):
-    flight_number :str = Field(ge=5,le=10)
-    destination :str = Field(min_length=1)
-    available_seats :int =Field(ge=1)
+class CreateFlight(BaseModel):
+    flight_number: str = Field(min_length=5, max_length=10)
+    destination: str = Field(min_length=1)
+    available_seats: int = Field(ge=1)
 
-def create_response(request:Request,status_code:int,message:str,data=None,error=None):
+def create_response(request: Request, status_code: int, message: str, data=None, error=None):
     return BaseResponse(
-        statusCode =status_code,
+        statusCode=status_code,
         message=message,
         data=data,
-        error= error,
+        error=error,
         timestamp=datetime.now().isoformat(),
-        path= request.url.path
+        path=request.url.path
     )
+
 flights_db = [
     {"id": 1, "flight_number": "VN-213", "destination": "Da Nang", "available_seats": 45, "status": "scheduled", "created_at": "2026-07-01T06:00:00Z"},
     {"id": 2, "flight_number": "VJ-122", "destination": "Phu Quoc", "available_seats": 12, "status": "scheduled", "created_at": "2026-07-01T07:30:00Z"}
 ]
 
-@app.get("/flights")
-def get_flights(
-    request:Request,
-    flight_status:Optional[str]=None
-):
-    result = flights_db
-    if status:
-        result=[flight for flight in result if flight["status"].lower() == flight_status.lower()]
+@app.get('/flights')
+def get_flights(request: Request, flight_status: Optional[str] = None):
+    if flight_status:
+        filtered_flights = [f for f in flights_db if f["status"] == flight_status]
+    else:
+        filtered_flights = flights_db
 
-    return create_response(request,status.HTTP_200_OK,message="Lấy danh sách chuyến bay thành công!",data=result)
-        
-@app.post("/flights")
-def create_flights(request:Request,payload:FlightCreate):
-    target_flight= next((f for f in flights_db if f["flight_number"].strip().lower() == payload.flight_number.strip().lower()),None)
+    return create_response(request, status.HTTP_200_OK, "Lấy danh sách chuyến bay thành công!", data=filtered_flights)
+
+@app.post('/flights', status_code=status.HTTP_201_CREATED)
+def create_flight(request: Request, flight: CreateFlight):
+    target_flight = next((f for f in flights_db if f['flight_number'].upper() == flight.flight_number.upper()), None)
 
     if target_flight:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Lỗi: Số hiệu chuyến bay này đã tồn tại trên hệ thống điều hành!",
+                "error": "ERR-AIR-01: Flight number conflict in current active schedule database."
+            }
         )
-    
-    new_flight = payload.model_dump()
 
-    new_flight["id"] =max([f["id"] for f in flights_db],default=0) +1
-
+    new_id = max([f["id"] for f in flights_db], default=0) + 1
+    new_flight = {
+        "id": new_id,
+        "flight_number": flight.flight_number,
+        "destination": flight.destination,
+        "available_seats": flight.available_seats,
+        "status": "scheduled",
+        "created_at": datetime.now().isoformat()
+    }
     flights_db.append(new_flight)
-    return create_response(request,status.HTTP_201_CREATED,"Khởi tạo chuyến bay mới thành công!",new_flight)
+    return create_response(request, status.HTTP_201_CREATED, "Khởi tạo chuyến bay mới thành công!", data=new_flight)
 
 @app.delete('/flights/{flight_id}')
 def delete_flight(request: Request, flight_id: int):
@@ -82,6 +90,7 @@ def http_exception_handler(
     exc: HTTPException
 ):
     response = create_response(request, exc.status_code, "Xảy ra lỗi HTTP", None, str(exc.detail))
+
     return JSONResponse(
         status_code=exc.status_code,
         content=response.model_dump()
@@ -102,5 +111,3 @@ def global_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=response.model_dump()
     )
-
-
